@@ -12,9 +12,9 @@ pinned: false
 **OpenEnv Hackathon 2026 Submission**
 
 > 🔗 **Important Links:**
-> - 🚀 **[Hugging Face Space Demo](YOUR_HF_SPACE_URL)**
+> - 🚀 **[Hugging Face Space Demo](https://huggingface.co/spaces/NGGAMER/disciplined-trader-train)**
 > - 📖 **[Mini-Blog / Video Pitch](YOUR_BLOG_OR_VIDEO_URL)**
-> - 📓 **[Training Colab Notebook](YOUR_COLAB_NOTEBOOK_URL)**
+> - 📓 **[Training Colab Notebook](https://colab.research.google.com/drive/1aSE4ajCWd29D0Bn9vFtJviAzuyhjGsuZ#scrollTo=O7jhNgUCsFjK)**
 
 ---
 
