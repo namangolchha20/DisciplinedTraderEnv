@@ -1,0 +1,11 @@
+name: DisciplinedTraderEnv
+description: Technical trading environment with multi-timeframes, risk limits, and psychology rules.
+version: 1.0.0
+entry_point: env.environment:DisciplinedTraderEnv
+tasks:
+  - id: easy
+    grader: env.graders:grade_easy
+  - id: medium
+    grader: env.graders:grade_medium
+  - id: hard
+    grader: env.graders:grade_hard
