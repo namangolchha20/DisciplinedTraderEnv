@@ -13,7 +13,7 @@ pinned: false
 
 > 🔗 **Important Links:**
 > - 🚀 **[Hugging Face Space Demo](https://huggingface.co/spaces/NGGAMER/disciplined-trader-train)**
-> - 📖 **[Mini-Blog / Video Pitch](YOUR_BLOG_OR_VIDEO_URL)**
+> - 📖 **[Mini-Blog / Video Pitch](https://github.com/namangolchha20/DisciplinedTraderEnv/blob/main/BLOG.md)**
 > - 📓 **[Training Colab Notebook](https://colab.research.google.com/drive/1aSE4ajCWd29D0Bn9vFtJviAzuyhjGsuZ#scrollTo=O7jhNgUCsFjK)**
 
 ---
