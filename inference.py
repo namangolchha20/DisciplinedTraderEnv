@@ -70,23 +70,26 @@ def reward_func(prompts, completions, **kwargs):
     """
     import re
     rewards = []
-    for i, completion in enumerate(completions):
-        # Create a fresh environment for each rollout
-        env = DisciplinedTraderEnv()
-        obs = env.reset(task_id="easy", seed=42 + i)   # deterministic but varied seeds
-        total_reward = 0.0
-        done = False
-        step_count = 0
-        # Run episode until done or max 100 steps (safety)
-        while not done and step_count < 100:
-            # Build prompt from current observation (short version to save tokens)
-            prompt = (f"Observation: cash={obs.cash:.0f}, value={obs.account_value:.0f}, "
-                      f"pos={obs.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
-                      "Generate an action in JSON: {\"action_type\": \"...\", \"amount_shares\": 0}")
-            # We don't use the prompt here because the completion is already the model's response.
-            # In GRPO, the model is called internally; here `completion` is the model's generated text.
-            # We parse that text as the action.
-            comp_text = completion if isinstance(completion, str) else str(completion)
+    for i in range(len(completions)):
+        prompt_text = prompts[i] if isinstance(prompts[i], str) else str(prompts[i])
+        comp_text = completions[i] if isinstance(completions[i], str) else str(completions[i])
+        
+        seed_match = re.search(r'\[SEED:(\d+)\]', prompt_text)
+        step_match = re.search(r'\[STEP:(\d+)\]', prompt_text)
+        
+        total_reward = -0.1
+        
+        if seed_match and step_match:
+            env_seed = int(seed_match.group(1))
+            env_step = int(step_match.group(1))
+            
+            env = DisciplinedTraderEnv()
+            obs = env.reset(task_id="easy", seed=env_seed)
+            
+            # Fast-forward to the exact state
+            for _ in range(env_step):
+                obs = env.step(Action("do_nothing", 0)).observation
+            
             try:
                 json_match = re.search(r'\{.*\}', comp_text, re.DOTALL)
                 if json_match:
@@ -100,12 +103,10 @@ def reward_func(prompts, completions, **kwargs):
             except Exception:
                 action = Action(action_type="do_nothing", amount_shares=0)
             
-            # Execute action in environment
+            # Execute ONE single action in the environment and get immediate reward
             result = env.step(action)
-            total_reward += result.reward
-            done = result.done
-            obs = result.observation
-            step_count += 1
+            total_reward = result.reward
+            
         rewards.append(total_reward)
     return rewards
 
@@ -141,19 +142,29 @@ if __name__ == "__main__":
     sma_mean, sma_std = evaluate_policy(sma_crossover_policy, num_episodes=5)
     print(f"SMA crossover: reward = {sma_mean:.2f} ± {sma_std:.2f}")
 
-    # Create dummy dataset with varied prompts
+    # Create realistic dataset with varied prompts
     from datasets import Dataset
+    import random
+    
     dummy_prompts = []
+    data_env = DisciplinedTraderEnv()
+    
     for i in range(50):   # 50 training examples
-        # Simulate a random observation (for prompt only; environment resets inside reward_func)
-        dummy_obs = {
-            "cash": 10000.0,
-            "position_shares": 0,
-            "price": 100.0
-        }
-        dummy_prompts.append(f"Observation: cash={dummy_obs['cash']:.0f}, "
-                             f"pos={dummy_obs['position_shares']}, price={dummy_obs['price']:.2f}\n"
-                             "Action JSON:")
+        seed_val = 42 + i
+        obs = data_env.reset(task_id="easy", seed=seed_val)
+        
+        # Fast forward random amount of steps to gather a real state
+        steps_to_advance = random.randint(10, 50)
+        for _ in range(steps_to_advance):
+            res = data_env.step(Action("do_nothing", 0))
+            obs = res.observation
+            
+        prompt = (f"[SEED:{seed_val}][STEP:{steps_to_advance}]\n"
+                  f"Observation: cash={data_env.cash:.0f}, value={data_env.account_value:.0f}, "
+                  f"pos={data_env.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
+                  f"Regime: {obs.market_regime}, Pattern: {obs.tf_1m.pattern}\n"
+                  "Generate an action in JSON: {\"action_type\": \"...\", \"amount_shares\": 0}")
+        dummy_prompts.append(prompt)
     train_dataset = Dataset.from_dict({"prompt": dummy_prompts})
 
     # GRPO configuration
