@@ -9,6 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install git+https://github.com/arcee-ai/mergekit.git && \
     pip install -r requirements.txt
 
 # Copy the rest of the application

@@ -8,7 +8,6 @@ openai
 torch
 matplotlib
 unsloth
-git+https://github.com/arcee-ai/mergekit.git
 accelerate
 transformers
 datasets
