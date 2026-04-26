@@ -115,8 +115,9 @@ def reward_func(prompts, completions, **kwargs):
 if __name__ == "__main__":
     # Load model (4-bit for memory efficiency)
     model, tokenizer = FastLanguageModel.from_pretrained(
-        "unsloth/gemma-3-1b-it",
+        "unsloth/Qwen2.5-1.5B-Instruct",
         max_seq_length=1024,
+        dtype=torch.float16,
         load_in_4bit=True,
     )
 
@@ -168,6 +169,8 @@ if __name__ == "__main__":
         max_prompt_length=128,
         max_completion_length=64,
         use_vllm=False,
+        fp16=True,
+        bf16=False,
     )
 
     trainer = GRPOTrainer(
