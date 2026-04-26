@@ -160,9 +160,9 @@ if __name__ == "__main__":
             obs = res.observation
             
         prompt = (f"[SEED:{seed_val}][STEP:{steps_to_advance}]\n"
-                  f"Observation: cash={data_env.cash:.0f}, value={data_env.account_value:.0f}, "
-                  f"pos={data_env.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
-                  f"Regime: {obs.market_regime}, Pattern: {obs.tf_1m.pattern}\n"
+                  f"Observation: cash={obs.cash:.0f}, value={obs.account_value:.0f}, "
+                  f"pos={obs.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
+                  f"Regime: {obs.market_regime}, Pattern: {obs.tf_1m.chart_pattern}\n"
                   "Generate an action in JSON: {\"action_type\": \"...\", \"amount_shares\": 0}")
         dummy_prompts.append(prompt)
     train_dataset = Dataset.from_dict({"prompt": dummy_prompts})
