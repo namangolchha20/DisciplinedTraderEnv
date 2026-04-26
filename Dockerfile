@@ -9,14 +9,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
-    pip install git+https://github.com/arcee-ai/mergekit.git && \
     pip install -r requirements.txt
 
 # Copy the rest of the application
 COPY . .
 
-# Make the training script executable
-RUN chmod +x train.sh
+# Expose port 7860 for Hugging Face Spaces
+EXPOSE 7860
 
-# Run training by default
-CMD ["./train.sh"]
+# Run the FastAPI server
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]
