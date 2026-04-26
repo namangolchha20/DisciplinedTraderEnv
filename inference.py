@@ -126,7 +126,9 @@ def format_reward_func(prompts, completions, **kwargs):
             if json_match:
                 action_dict = json.loads(json_match.group())
                 if "action_type" in action_dict and "amount_shares" in action_dict:
-                    reward = 0.1  # Bonus for valid format
+                    valid_actions = ["open_long", "open_short", "close_position", "do_nothing"]
+                    if action_dict["action_type"] in valid_actions:
+                        reward = 0.1  # Bonus for valid format AND valid action string
         except Exception:
             pass
         rewards.append(reward)
@@ -185,6 +187,7 @@ if __name__ == "__main__":
                   f"Observation: cash={obs.cash:.0f}, value={obs.account_value:.0f}, "
                   f"pos={obs.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
                   f"Regime: {obs.market_regime}, Pattern: {obs.tf_1m.chart_pattern}\n"
+                  "Valid action_types: 'open_long', 'open_short', 'close_position', 'do_nothing'\n"
                   "Generate an action in JSON: {\"action_type\": \"...\", \"amount_shares\": 0}")
         dummy_prompts.append(prompt)
     train_dataset = Dataset.from_dict({"prompt": dummy_prompts})
