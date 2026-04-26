@@ -88,7 +88,7 @@ def reward_func(prompts, completions, **kwargs):
             
             # Fast-forward to the exact state
             for _ in range(env_step):
-                obs = env.step(Action("do_nothing", 0)).observation
+                obs = env.step(Action(action_type="do_nothing", amount_shares=0)).observation
             
             try:
                 json_match = re.search(r'\{.*\}', comp_text, re.DOTALL)
@@ -156,7 +156,7 @@ if __name__ == "__main__":
         # Fast forward random amount of steps to gather a real state
         steps_to_advance = random.randint(10, 50)
         for _ in range(steps_to_advance):
-            res = data_env.step(Action("do_nothing", 0))
+            res = data_env.step(Action(action_type="do_nothing", amount_shares=0))
             obs = res.observation
             
         prompt = (f"[SEED:{seed_val}][STEP:{steps_to_advance}]\n"
