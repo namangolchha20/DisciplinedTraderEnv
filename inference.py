@@ -165,6 +165,9 @@ if __name__ == "__main__":
         learning_rate=1e-5,
         logging_steps=5,
         save_steps=20,
+        max_prompt_length=128,
+        max_completion_length=64,
+        use_vllm=False,
     )
 
     trainer = GRPOTrainer(
