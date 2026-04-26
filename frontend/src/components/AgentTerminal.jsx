@@ -28,7 +28,9 @@ const AgentTerminal = ({ sessionId, metrics, setMetrics }) => {
       } catch (e) {
         // Fallback mock if backend is down (so UI still works for demo)
         await new Promise(r => setTimeout(r, 1500));
-        action = { action_type: "open_long", amount_shares: 10 };
+        const actions = ["open_long", "open_short", "close_position", "do_nothing"];
+        const randAction = actions[Math.floor(Math.random() * actions.length)];
+        action = { action_type: randAction, amount_shares: 10 };
       }
 
       addLog('agent', JSON.stringify(action, null, 2));
