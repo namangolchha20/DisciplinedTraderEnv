@@ -1,5 +1,6 @@
 import uvicorn
 import json
+import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -8,9 +9,10 @@ from openenv.core.env_server import create_app
 from env.models import Action, Observation
 from env.environment import DisciplinedTraderEnv
 
-# Global model variables
+# Global variables
 model = None
 tokenizer = None
+sessions = {}
 
 app = create_app(DisciplinedTraderEnv, Action, Observation, env_name="disciplined_trader_env")
 
@@ -41,9 +43,25 @@ def load_agent():
         print(f"Warning: Could not load trained agent. If you are training right now, this is expected: {e}")
 
 class PredictRequest(BaseModel):
-    observation: Observation
+    observation: dict
     seed: int = 42
     step: int = 0
+
+@app.post("/api/reset")
+def api_reset():
+    session_id = str(uuid.uuid4())
+    env = DisciplinedTraderEnv()
+    obs = env.reset(task_id="easy")
+    sessions[session_id] = env
+    return {"session_id": session_id, "observation": obs}
+
+@app.post("/api/step/{session_id}")
+def api_step(session_id: str, action: Action):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    env = sessions[session_id]
+    result = env.step(action)
+    return {"observation": result.observation, "reward": result.reward, "done": result.done, "info": result.info}
 
 @app.post("/agent/predict")
 def predict_action(req: PredictRequest):
@@ -53,9 +71,9 @@ def predict_action(req: PredictRequest):
         
     obs = req.observation
     prompt = (f"[SEED:{req.seed}][STEP:{req.step}]\n"
-              f"Observation: cash={obs.cash:.0f}, value={obs.account_value:.0f}, "
-              f"pos={obs.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
-              f"Regime: {obs.market_regime}, Pattern: {obs.tf_1m.chart_pattern}\n"
+              f"Observation: cash={obs.get('cash', 0):.0f}, value={obs.get('account_value', 0):.0f}, "
+              f"pos={obs.get('position_shares', 0)}, price={obs.get('tf_1m', {}).get('ohlcv', {}).get('close', 0):.2f}\n"
+              f"Regime: {obs.get('market_regime', 'unknown')}, Pattern: {obs.get('tf_1m', {}).get('chart_pattern', 'unknown')}\n"
               "Valid action_types: 'open_long', 'open_short', 'close_position', 'do_nothing'\n"
               "Generate an action in JSON: {\"action_type\": \"...\", \"amount_shares\": 0}")
     

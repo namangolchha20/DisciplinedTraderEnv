@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { Terminal, Send, Cpu } from 'lucide-react';
 
-const AgentTerminal = ({ metrics, setMetrics }) => {
+const AgentTerminal = ({ sessionId, metrics, setMetrics }) => {
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState([
     { type: 'system', message: 'Agent console initialized. Ready for predictions.' }
@@ -20,13 +20,7 @@ const AgentTerminal = ({ metrics, setMetrics }) => {
       let action;
       try {
         const response = await axios.post('http://localhost:7860/agent/predict', {
-          observation: {
-            cash: metrics.cash,
-            account_value: metrics.accountValue,
-            position_shares: metrics.positionShares,
-            market_regime: metrics.regime,
-            tf_1m: { ohlcv: { close: metrics.price }, chart_pattern: metrics.pattern }
-          },
+          observation: metrics.rawObservation,
           seed: 42,
           step: 0
         }, { timeout: 3000 });
@@ -39,34 +33,53 @@ const AgentTerminal = ({ metrics, setMetrics }) => {
 
       addLog('agent', JSON.stringify(action, null, 2));
       
-      // Update local metrics state slightly to simulate a step (mock)
-      if (action.action_type === 'open_long') {
-        const cost = action.amount_shares * metrics.price;
-        setMetrics(m => ({ 
-          ...m, 
-          positionShares: m.positionShares + action.amount_shares, 
-          cash: m.cash - cost,
-          // Randomly fluctuate price for next step
-          price: m.price * (1 + (Math.random() * 0.02 - 0.01))
-        }));
-      } else if (action.action_type === 'open_short') {
-        const proceeds = action.amount_shares * metrics.price;
-        setMetrics(m => ({ 
-          ...m, 
-          positionShares: m.positionShares - action.amount_shares, 
-          cash: m.cash + proceeds,
-          price: m.price * (1 + (Math.random() * 0.02 - 0.01))
-        }));
-      } else if (action.action_type === 'close_position') {
-        const value = Math.abs(metrics.positionShares) * metrics.price;
-        // Simple mock of PnL: if we were long and closed, we get cash back. 
-        // Real logic is handled by the backend, this is just for UI visualization.
-        setMetrics(m => ({ 
-          ...m, 
-          cash: m.cash + (m.positionShares > 0 ? value : -value), 
-          positionShares: 0,
-          price: m.price * (1 + (Math.random() * 0.02 - 0.01))
-        }));
+      // Advance the real environment!
+      if (sessionId) {
+        try {
+          const stepRes = await axios.post(`http://localhost:7860/api/step/${sessionId}`, action);
+          const obs = stepRes.data.observation;
+          setMetrics({
+            cash: obs.cash,
+            accountValue: obs.account_value,
+            positionShares: obs.position_shares,
+            price: obs.tf_1m.ohlcv.close,
+            regime: obs.market_regime,
+            pattern: obs.tf_1m.chart_pattern,
+            rawObservation: obs
+          });
+          if (stepRes.data.reward) {
+             addLog('system', `Step Reward: ${stepRes.data.reward.toFixed(4)}`);
+          }
+        } catch (e) {
+          addLog('error', `Env step failed: ${e.message}`);
+        }
+      } else {
+        // Update local metrics state slightly to simulate a step (mock mode)
+        if (action.action_type === 'open_long') {
+          const cost = action.amount_shares * metrics.price;
+          setMetrics(m => ({ 
+            ...m, 
+            positionShares: m.positionShares + action.amount_shares, 
+            cash: m.cash - cost,
+            price: m.price * (1 + (Math.random() * 0.02 - 0.01))
+          }));
+        } else if (action.action_type === 'open_short') {
+          const proceeds = action.amount_shares * metrics.price;
+          setMetrics(m => ({ 
+            ...m, 
+            positionShares: m.positionShares - action.amount_shares, 
+            cash: m.cash + proceeds,
+            price: m.price * (1 + (Math.random() * 0.02 - 0.01))
+          }));
+        } else if (action.action_type === 'close_position') {
+          const value = Math.abs(metrics.positionShares) * metrics.price;
+          setMetrics(m => ({ 
+            ...m, 
+            cash: m.cash + (m.positionShares > 0 ? value : -value), 
+            positionShares: 0,
+            price: m.price * (1 + (Math.random() * 0.02 - 0.01))
+          }));
+        }
       }
       
     } catch (error) {
