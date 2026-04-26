@@ -2,6 +2,7 @@ import uvicorn
 import json
 import torch
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from openenv.core.env_server import create_app
@@ -13,6 +14,15 @@ model = None
 tokenizer = None
 
 app = create_app(DisciplinedTraderEnv, Action, Observation, env_name="disciplined_trader_env")
+
+# Allow the frontend (port 5173) to communicate with this backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def load_agent():
