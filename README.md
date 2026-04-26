@@ -18,9 +18,25 @@ pinned: false
 
 ---
 
-## 🎯 Theme #3: World Modeling (Professional Tasks)
-**The Problem:** Most LLM trading agents fail in live environments because they treat trading as a next-token prediction task. They hallucinate invalid actions, revenge trade, and suffer massive drawdowns.
-**Our Solution:** We built a partially observable, multi-timeframe financial world (`DisciplinedTraderEnv`). We then trained an LLM agent to not just predict prices, but to **execute complex, multi-step trading workflows** while strictly adhering to risk management. 
+## 🎯 The Problem & Our Inspiration
+This project was born out of 13 hard-learned personal lessons from live trading:
+1. Never overtrade.
+2. Don't buy call and put options together.
+3. Have patience if you feel that the price will go high.
+4. Don't make stock market a permanent earning place, start a business and make it big.
+5. Never take any unusual trade.
+6. Never trade all of your monetary value.
+7. Act fast very fast.
+8. Never forget about theta, it can blank you out.
+9. Never trade after a huge profit.
+10. Never see the PnL while trading because it can make you take incorrect decisions. Always see your analysis.
+11. Always trade by your analysis, never trade seeing others taking that trade.
+12. Always use a stop loss.
+13. Don't trade against the market.
+
+**The Solution:** Most LLM trading agents fail because they treat trading as a next-token prediction task, falling victim to the exact same psychological traps (fear, greed, revenge trading, overtrading) that humans do. 
+
+We built a partially observable, multi-timeframe financial world (`DisciplinedTraderEnv`) to mathematically enforce these 13 rules. We then trained an LLM agent to **execute complex, multi-step trading workflows** while strictly adhering to this risk management philosophy. 
 
 Instead of relying on hardcoded heuristics, we trained an Unsloth-optimized `Qwen2.5-1.5B-Instruct` model using **Generative Reward Policy Optimization (GRPO)** to internalize trading discipline.
 
