@@ -50,7 +50,6 @@ As seen in the reward curve, the agent underwent two distinct learning phases:
 1. **Phase 1 (Risk Aversion):** The agent quickly learned that random trading destroys capital via transaction costs. The trading reward stabilized at `-0.001` (the baseline time penalty for doing nothing). It learned to stop bleeding money!
 2. **Phase 2 (Format Mastery):** The agent perfectly mastered the JSON formatting constraint, pushing the formatting reward to its maximum.
 
-*(Note: Replace the image below with your generated plot!)*
 ![Training Reward Curve](reward_curve.png)
 *The reward curve showing the agent mastering JSON formatting and stabilizing trading losses over 900 GRPO steps.*
 
