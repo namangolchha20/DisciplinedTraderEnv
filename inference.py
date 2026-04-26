@@ -111,6 +111,28 @@ def reward_func(prompts, completions, **kwargs):
     return rewards
 
 # ------------------------------------------------------------
+# Format Reward Function for GRPOTrainer
+# ------------------------------------------------------------
+def format_reward_func(prompts, completions, **kwargs):
+    """Reward for generating perfectly valid JSON matching the schema."""
+    import re
+    import json
+    rewards = []
+    for completion in completions:
+        comp_text = completion if isinstance(completion, str) else str(completion)
+        reward = 0.0
+        try:
+            json_match = re.search(r'\{.*\}', comp_text, re.DOTALL)
+            if json_match:
+                action_dict = json.loads(json_match.group())
+                if "action_type" in action_dict and "amount_shares" in action_dict:
+                    reward = 0.1  # Bonus for valid format
+        except Exception:
+            pass
+        rewards.append(reward)
+    return rewards
+
+# ------------------------------------------------------------
 # Main Training Script
 # ------------------------------------------------------------
 if __name__ == "__main__":
@@ -149,7 +171,7 @@ if __name__ == "__main__":
     dummy_prompts = []
     data_env = DisciplinedTraderEnv()
     
-    for i in range(50):   # 50 training examples
+    for i in range(300):   # 300 training examples
         seed_val = 42 + i
         obs = data_env.reset(task_id="easy", seed=seed_val)
         
@@ -170,7 +192,7 @@ if __name__ == "__main__":
     # GRPO configuration
     training_args = GRPOConfig(
         output_dir="./trading_agent",
-        num_train_epochs=1,
+        num_train_epochs=3,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
         num_generations=4,  # Fix Unsloth warning: make this match bs * grad_accum
@@ -186,7 +208,7 @@ if __name__ == "__main__":
 
     trainer = GRPOTrainer(
         model=model,
-        reward_funcs=reward_func, 
+        reward_funcs=[reward_func, format_reward_func], 
         tokenizer=tokenizer,
         train_dataset=train_dataset,
         args=training_args,
