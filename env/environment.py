@@ -1,6 +1,5 @@
 import random
 import numpy as np
-from typing import List
 from openenv.core.env_server import Environment
 from .models import Observation, Action, StepResult, Info, TimeframeData
 from .data_generator import generate_synthetic_ohlcv, resample_ohlcv
@@ -11,11 +10,37 @@ from .indicators import (
 )
 from .patterns_v2 import detect_chart_pattern_v2 as detect_chart_pattern
 
+INITIAL_CAPITAL = 10_000.0
+# Indicators / patterns only need a bounded lookback. Capping the window keeps
+# per-step cost O(1) instead of O(n), which makes long episodes ~20x faster.
+INDICATOR_WINDOW = 240
+
+BULLISH_CANDLES = {
+    "hammer", "inverted_hammer", "bullish_engulfing", "bullish_harami",
+    "bullish_kicker", "morning_star", "three_white_soldiers",
+    "bullish_marubozu", "dragonfly_doji", "bullish_abandoned_baby",
+}
+BEARISH_CANDLES = {
+    "shooting_star", "hanging_man", "bearish_engulfing", "bearish_harami",
+    "bearish_kicker", "evening_star", "three_black_crows",
+    "bearish_marubozu", "gravestone_doji", "bearish_abandoned_baby",
+}
+BULLISH_CHARTS = {
+    "double_bottom", "triple_bottom", "cup_and_handle",
+    "reverse_head_and_shoulders", "falling_wedge", "bullish_flag",
+    "bullish_rectangle", "bullish_symmetrical_triangle",
+}
+BEARISH_CHARTS = {
+    "head_and_shoulders", "double_top", "triple_top",
+    "rising_wedge", "bearish_flag", "bearish_rectangle",
+}
+
+
 class DisciplinedTraderEnv(Environment):
     def __init__(self):
         self.max_bars = 5000
         self._rng = None
-        self.cash = 10000.0
+        self.cash = INITIAL_CAPITAL
         self.position_shares = 0
         self.entry_price = 0.0
         self.stop_loss = None
@@ -28,9 +53,14 @@ class DisciplinedTraderEnv(Environment):
         self.ohlcv_1d = []
         self.current_step = 0
         self.task = None
-        self.prev_pattern = None
-        self.peak_value = 10000.0
+        self.peak_value = INITIAL_CAPITAL
+        self.max_drawdown = 0.0
+        self.equity_curve = []
+        self._cached_obs = None
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
     def reset(self, task_id: str = None, seed: int = None) -> Observation:
         if seed is not None:
             self._rng = random.Random(seed)
@@ -38,14 +68,15 @@ class DisciplinedTraderEnv(Environment):
         else:
             self._rng = random.Random()
         self.current_step = 0
-        self.cash = 10000.0
+        self.cash = INITIAL_CAPITAL
         self.position_shares = 0
         self.entry_price = 0.0
         self.stop_loss = None
         self.last_trade_bar = 0
         self.trades = []
-        self.prev_pattern = "none"
-        self.peak_value = 10000.0
+        self.peak_value = INITIAL_CAPITAL
+        self.max_drawdown = 0.0
+        self.equity_curve = [INITIAL_CAPITAL]
         self.task = task_id if task_id else "easy"
 
         if self.task == "easy":
@@ -65,25 +96,50 @@ class DisciplinedTraderEnv(Environment):
         self.ohlcv_1h = resample_ohlcv(raw_1m, 60)
         self.ohlcv_1d = resample_ohlcv(raw_1m, 390)
 
-        return self._get_observation()
+        obs = self._get_observation()
+        self._cached_obs = obs
+        return obs
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _current_price(self) -> float:
+        idx = min(self.current_step, len(self.ohlcv_1m) - 1)
+        return self.ohlcv_1m[idx].close
+
+    def account_value(self) -> float:
+        """Mark-to-market equity: cash + open position value."""
+        return self.cash + self.position_shares * self._current_price()
+
+    def _close_position(self, price: float) -> float:
+        """Liquidate the open position at `price`. Returns realised profit."""
+        # Works for both directions: longs sell (cash += s*p), shorts buy to
+        # cover (cash += (-s)*p), and profit = shares * (exit - entry) holds
+        # with signed shares.
+        self.cash += self.position_shares * price
+        profit = self.position_shares * (price - self.entry_price)
+        self.trades.append((self.last_trade_bar, self.current_step, profit))
+        self.position_shares = 0
+        self.entry_price = 0.0
+        self.stop_loss = None
+        return profit
 
     def _get_observation(self) -> Observation:
-        idx_1m = self.current_step
+        idx_1m = min(self.current_step, len(self.ohlcv_1m) - 1)
         idx_5m = idx_1m // 5
         idx_15m = idx_1m // 15
         idx_1h = idx_1m // 60
         idx_1d = idx_1m // 390
 
         def make_tf_data(ohlcv_list, idx):
-            if idx >= len(ohlcv_list):
-                idx = len(ohlcv_list) - 1
-            if idx < 0:
-                idx = 0
+            idx = max(0, min(idx, len(ohlcv_list) - 1))
             bar = ohlcv_list[idx]
-            prices = [b.close for b in ohlcv_list[:idx+1]]
-            highs = [b.high for b in ohlcv_list[:idx+1]]
-            lows = [b.low for b in ohlcv_list[:idx+1]]
-            volumes = [b.volume for b in ohlcv_list[:idx+1]]
+            start = max(0, idx + 1 - INDICATOR_WINDOW)
+            window = ohlcv_list[start:idx + 1]
+            prices = [b.close for b in window]
+            highs = [b.high for b in window]
+            lows = [b.low for b in window]
+            volumes = [b.volume for b in window]
 
             rsi = compute_rsi(prices)
             sma20 = compute_sma(prices, 20)
@@ -151,20 +207,25 @@ class DisciplinedTraderEnv(Environment):
             max_bars=self.max_bars
         )
 
+    # ------------------------------------------------------------------
+    # Step
+    # ------------------------------------------------------------------
     def step(self, action: Action) -> StepResult:
-        obs_before = self._get_observation()
+        # The observation returned by the previous step() describes the same
+        # bar we are acting on now, so reuse it instead of recomputing.
+        obs_before = self._cached_obs if self._cached_obs is not None else self._get_observation()
         current_price = obs_before.tf_1m.ohlcv.close
         reward = 0.0
 
         prev_candle_pattern = obs_before.tf_1m.candlestick_pattern
         prev_chart_pattern = obs_before.tf_1m.chart_pattern
 
-        # Action execution (unchanged)
+        # ---------------- Action execution ----------------
         if action.action_type == "open_long":
             if self.position_shares != 0:
                 reward -= 0.1
             else:
-                shares = min(action.amount_shares, int(self.cash * 0.3 / current_price))
+                shares = min(action.amount_shares or 0, int(self.cash * 0.3 / current_price))
                 if shares > 0:
                     self.position_shares = shares
                     self.entry_price = current_price
@@ -177,7 +238,7 @@ class DisciplinedTraderEnv(Environment):
             if self.position_shares != 0:
                 reward -= 0.1
             else:
-                shares = min(action.amount_shares, int(self.cash * 0.3 / current_price))
+                shares = min(action.amount_shares or 0, int(self.cash * 0.3 / current_price))
                 if shares > 0:
                     self.position_shares = -shares
                     self.entry_price = current_price
@@ -188,20 +249,8 @@ class DisciplinedTraderEnv(Environment):
 
         elif action.action_type == "close_position":
             if self.position_shares != 0:
-                close_price = current_price
-                if self.position_shares > 0:
-                    self.cash += self.position_shares * close_price
-                    profit = self.position_shares * (close_price - self.entry_price)
-                else:
-                    self.cash += self.position_shares * close_price
-                    profit = -self.position_shares * (self.entry_price - close_price)
-                self.trades.append((self.last_trade_bar, self.current_step, profit))
-                self.position_shares = 0
-                self.entry_price = 0.0
-                self.stop_loss = None
+                profit = self._close_position(current_price)
                 reward += profit / 1000.0
-                if profit / (self.cash - profit) > 0.1:
-                    reward -= 0.1
 
         elif action.action_type == "set_stop_loss":
             if action.stop_loss_percent:
@@ -211,38 +260,28 @@ class DisciplinedTraderEnv(Environment):
                     self.stop_loss = current_price * (1 + action.stop_loss_percent)
                 reward += 0.01
 
-        # Stop loss check
+        # ---------------- Stop loss check ----------------
         if self.position_shares != 0 and self.stop_loss:
-            if (self.position_shares > 0 and current_price <= self.stop_loss) or (self.position_shares < 0 and current_price >= self.stop_loss):
-                if self.position_shares > 0:
-                    self.cash += self.position_shares * current_price
-                    profit = self.position_shares * (current_price - self.entry_price)
-                else:
-                    self.cash += self.position_shares * current_price
-                    profit = -self.position_shares * (self.entry_price - current_price)
-                self.trades.append((self.last_trade_bar, self.current_step, profit))
-                self.position_shares = 0
-                self.entry_price = 0.0
-                self.stop_loss = None
+            stopped = (self.position_shares > 0 and current_price <= self.stop_loss) or \
+                      (self.position_shares < 0 and current_price >= self.stop_loss)
+            if stopped:
+                profit = self._close_position(current_price)
                 reward += profit / 1000.0
-                if profit / (self.cash - profit) > 0.1:
-                    reward -= 0.1
 
-        # Pattern bonus
-        bullish_patterns = ["hammer", "bullish_engulfing", "morning_star", "cup_and_handle", "double_bottom"]
-        bearish_patterns = ["shooting_star", "bearish_engulfing", "evening_star", "head_and_shoulders", "double_top"]
-        if action.action_type == "open_long" and prev_candle_pattern in bullish_patterns:
+        # ---------------- Pattern alignment bonus ----------------
+        if action.action_type == "open_long" and prev_candle_pattern in BULLISH_CANDLES:
             reward += 0.05
-        if action.action_type == "open_short" and prev_candle_pattern in bearish_patterns:
+        if action.action_type == "open_short" and prev_candle_pattern in BEARISH_CANDLES:
             reward += 0.05
-        if action.action_type == "open_short" and prev_chart_pattern in ["head_and_shoulders", "double_top"]:
+        if action.action_type == "open_long" and prev_chart_pattern in BULLISH_CHARTS:
             reward += 0.1
-        if action.action_type == "open_long" and prev_chart_pattern in ["double_bottom", "cup_and_handle"]:
+        if action.action_type == "open_short" and prev_chart_pattern in BEARISH_CHARTS:
             reward += 0.1
 
-        # Additional penalties / bonuses
+        # ---------------- Discipline shaping ----------------
+        # Let winners run: small bonus for holding a profitable position.
         if self.position_shares != 0 and self.current_step - self.last_trade_bar > 5:
-            unrealized = self.position_shares * (current_price - self.entry_price) if self.position_shares > 0 else -self.position_shares * (self.entry_price - current_price)
+            unrealized = self.position_shares * (current_price - self.entry_price)
             if unrealized > 0:
                 reward += 0.005
 
@@ -252,46 +291,55 @@ class DisciplinedTraderEnv(Environment):
         elif self.position_shares != 0:
             reward -= 0.005
 
+        # Naked positions (no stop loss) are undisciplined.
         if self.position_shares != 0 and self.stop_loss is None:
             reward -= 0.02
 
+        # Time cost of capital.
         reward -= 0.001
 
-        if self.trades and (self.current_step - self.trades[-1][1]) < 20:
-            trade_profit = self.trades[-1][2]
-            denominator = self.cash - trade_profit
-            if denominator != 0 and (trade_profit / denominator) > 0.1:
-                if action.action_type in ["open_long", "open_short"]:
-                    reward -= 0.1
+        # Revenge trading: re-entering within 20 bars of a significant LOSS.
+        if self.trades and action.action_type in ("open_long", "open_short"):
+            bars_since_exit = self.current_step - self.trades[-1][1]
+            last_profit = self.trades[-1][2]
+            if bars_since_exit < 20 and last_profit < -0.02 * max(self.cash, 1.0):
+                reward -= 0.1
 
+        # ---------------- Advance time ----------------
         self.current_step += 1
         done = self.current_step >= self.max_bars
+
+        new_price = self._current_price()
+
+        # Forced liquidation at episode end (actually move the cash!).
         if done and self.position_shares != 0:
-            final_price = self._get_observation().tf_1m.ohlcv.close
-            if self.position_shares > 0:
-                profit = self.position_shares * (final_price - self.entry_price)
-            else:
-                profit = -self.position_shares * (self.entry_price - final_price)
+            profit = self._close_position(new_price)
             reward += profit / 1000.0
 
-        # *** FIX: initialise drawdown BEFORE using it ***
-        drawdown = 0.0
+        # ---------------- Equity / drawdown tracking ----------------
+        equity = self.cash + self.position_shares * new_price
+        self.equity_curve.append(equity)
+        if equity > self.peak_value:
+            self.peak_value = equity
+        if self.peak_value > 0:
+            dd = (self.peak_value - equity) / self.peak_value
+            if dd > self.max_drawdown:
+                self.max_drawdown = dd
 
         if done:
             if len(self.trades) > 1:
-                returns = [p for _,_,p in self.trades]
+                returns = [p for _, _, p in self.trades]
                 sharpe = np.mean(returns) / (np.std(returns) + 1e-9)
                 reward += sharpe * 0.1
-            final_value = self.cash + (self.position_shares * current_price if self.position_shares != 0 else 0)
-            drawdown = (self.peak_value - final_value) / self.peak_value if self.peak_value > 0 else 0
-            reward -= drawdown * 0.2
+            reward -= self.max_drawdown * 0.2
 
-        total_profit = sum(p for _,_,p in self.trades)
-        wins = sum(1 for _,_,p in self.trades if p>0)
+        total_profit = sum(p for _, _, p in self.trades)
+        wins = sum(1 for _, _, p in self.trades if p > 0)
         win_rate = wins / len(self.trades) if self.trades else 0.0
-        info = Info(profit=total_profit, drawdown=drawdown, win_rate=win_rate, total_trades=len(self.trades))
+        info = Info(profit=total_profit, drawdown=self.max_drawdown, win_rate=win_rate, total_trades=len(self.trades))
 
         obs = self._get_observation()
+        self._cached_obs = obs
         return StepResult(observation=obs, reward=reward, done=done, info=info)
 
     def state(self) -> dict:
@@ -299,4 +347,7 @@ class DisciplinedTraderEnv(Environment):
             "cash": self.cash,
             "position": self.position_shares,
             "step": self.current_step,
+            "equity": self.account_value(),
+            "max_drawdown": self.max_drawdown,
+            "trades": len(self.trades),
         }

@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv312/
+venv/
+.env
+
+# Local caches (keeps downloads out of system temp)
+hf-cache/
+pip-cache/
+.tmp/
+
+# Training artifacts
+trained_trader_lora/
+trading_agent/
+unsloth_compiled_cache/
+training_state.json
+*.safetensors
+*.bin

@@ -18,65 +18,189 @@ pinned: false
 
 ---
 
-## 🎯 Theme #3: World Modeling (Professional Tasks)
-**The Problem:** Most LLM trading agents fail in live environments because they treat trading as a next-token prediction task. They hallucinate invalid actions, revenge trade, and suffer massive drawdowns.
-**Our Solution:** We built a partially observable, multi-timeframe financial world (`DisciplinedTraderEnv`). We then trained an LLM agent to not just predict prices, but to **execute complex, multi-step trading workflows** while strictly adhering to risk management. 
+## Overview
 
-Instead of relying on hardcoded heuristics, we trained an Unsloth-optimized `Qwen2.5-1.5B-Instruct` model using **Generative Reward Policy Optimization (GRPO)** to internalize trading discipline.
+Most LLM trading agents fail in live environments because they treat trading as next-token prediction — hallucinating invalid actions, revenge trading, and blowing up on drawdowns.
 
----
+**DisciplinedTraderEnv** is a partially observable, multi-timeframe financial simulator built on [OpenEnv](https://github.com/openenv/openenv). We train a **Qwen2.5-0.5B-Instruct** agent with **GRPO** (via TRL + Unsloth) to output valid JSON trading actions while respecting risk rules.
 
-## 🌍 The Environment: How It Works
-The agent operates in a fully functional trading simulator built on the latest release of `OpenEnv`.
-* **What the Agent Sees (State):** Multi-timeframe OHLCV data (1m, 5m, 15m, 1h, 1d), current cash, active position shares, unrealized PnL, detected chart patterns (e.g., bull flags), and market regimes.
-* **What the Agent Does (Actions):** The LLM must output perfectly formatted JSON to `open_long`, `open_short`, `close_position`, or `do_nothing`.
-* **The Challenge:** The market is noisy. Overtrading incurs massive transaction penalties. Holding losing positions incurs drawdown penalties.
+The repo also ships a **live web trading terminal** — no frontend build step, served directly from FastAPI.
 
-### 🛡️ Preventing Reward Hacking
-To prevent the agent from gaming the system, we used **multiple independent reward checks**:
-1. **Format Compliance (The Verifier):** Heavily penalizes non-JSON outputs or invalid action schemas.
-2. **Execution Success:** Punishes attempting to short without capital or open concurrent positions.
-3. **Strategic Alignment:** Rewards entering trades during valid bullish/bearish candlestick patterns.
-4. **Drawdown Penalties:** Heavily penalizes the agent at the end of the episode if peak-to-trough account value drops significantly.
+![Trading Terminal](terminal_screenshot.png)
 
 ---
 
-## 🧠 Training Pipeline & Results
+## Features
 
-We used **HF TRL** and **Unsloth** for highly efficient LoRA training on a single T4 GPU. The agent learned through trial and error, not supervised mimicking.
+### Web terminal (`http://localhost:7860`)
 
-### 📊 Training Progress
-As seen in the reward curve, the agent underwent two distinct learning phases:
-1. **Phase 1 (Risk Aversion):** The agent quickly learned that random trading destroys capital via transaction costs. The trading reward stabilized at `-0.001` (the baseline time penalty for doing nothing). It learned to stop bleeding money!
-2. **Phase 2 (Format Mastery):** The agent perfectly mastered the JSON formatting constraint, pushing the formatting reward to its maximum.
+| Feature | Details |
+|---|---|
+| Charts | Multi-TF candlesticks (1m / 5m / 15m / 1h / 1d), SMA-20, Bollinger Bands, volume, entry/stop lines, trade markers |
+| Autopilot | Disciplined Bot, Trained LLM (GRPO), SMA crossover, Random — 1×–25× speed |
+| Manual mode | Long / short / close / set stop — hotkeys: `Space`, `→`, `L`, `S`, `C` |
+| Radar | RSI, SuperTrend, candle/chart patterns across all timeframes |
+| Grading | S/A/B/C/D/F rank ring from official task graders at episode end |
 
-### 🏆 Before / After Baseline Comparison
-We evaluated the agent in `evaluate.py` over unseen test data:
-* **Untrained Random Agent:** `-19.78 ± 0.69` Reward (Rapidly blew up the account).
-* **Baseline SMA Strategy:** `-0.50 ± 0.00` Reward (Suffered from whipsaws).
-* **Trained GRPO Agent:** *(Add your final reward here!)* Achieved disciplined capital preservation and perfectly formatted execution.
+### Trained LLM mode
+
+- Loads a LoRA adapter from `./trained_trader_lora/` (hot-reloads after retraining)
+- ~6 s per bar on a 4 GB GPU (RTX 3050 class) — speed slider is disabled in LLM mode
+- **Automatic risk overlay**: when the LLM waits (`do_nothing`), the server applies the same trailing stops and confluence exits as the Disciplined Bot
 
 ---
 
-## 🚀 Reproducibility & Deployment
+## Quick start (Windows)
 
-### 1. Run the FastAPI Backend (or view on HF Spaces)
-```bash
-docker build -t disciplined_trader . 
-docker run -p 7860:7860 disciplined_trader
+Requires **Python 3.12**, **NVIDIA GPU** (for training + LLM inference), and **Git**.
+
+```powershell
+git clone https://github.com/namangolchha20/DisciplinedTraderEnv.git
+cd DisciplinedTraderEnv
+
+# Create venv & install deps (CUDA 12.6 torch)
+python -m venv .venv312
+.\.venv312\Scripts\python.exe -m pip install -U pip
+.\.venv312\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu126
+.\.venv312\Scripts\python.exe -m pip install -r requirements.txt
+
+# Start the web terminal
+.\run_server.ps1
+# → open http://127.0.0.1:7860
 ```
-Or run directly via Uvicorn:
+
+### Train & evaluate
+
+```powershell
+# GRPO training (saves adapter to ./trained_trader_lora/)
+.\run_train.ps1
+
+# Compare LLM vs baselines (needs trained adapter)
+.\run_evaluate.ps1
+```
+
+> **Note:** `trained_trader_lora/` is gitignored. Train locally or upload weights separately for deployment.
+
+---
+
+## Quick start (Linux / macOS)
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install torch --index-url https://download.pytorch.org/whl/cu126   # or cpu index if no GPU
+pip install -r requirements.txt
+
+export HF_HOME="$(pwd)/hf-cache"
 uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
-### 2. Train the Agent Yourself
-A minimal training script (`inference.py`) is provided. It uses Unsloth for 2x faster, memory-efficient GRPO training.
-```bash
-python inference.py
+---
+
+## Project structure
+
+```
+DisciplinedTraderEnv/
+├── env/                  # OpenEnv environment, policies, graders, model loader
+├── server/               # FastAPI backend + static web terminal
+├── inference.py          # GRPO training (Unsloth + TRL)
+├── evaluate.py           # Benchmark LLM vs rule-based baselines
+├── run_server.ps1        # Start terminal (Windows)
+├── run_train.ps1         # Start training (Windows)
+├── run_evaluate.ps1      # Run evaluation (Windows)
+├── trained_trader_lora/  # LoRA adapter (created by training, gitignored)
+├── training_state.json   # Seed cursor for successive training runs
+└── requirements.txt
 ```
 
-### 3. Evaluate the Agent
+---
+
+## Tasks
+
+| Task | Bars | Volatility | Grader focus |
+|------|:----:|:----------:|--------------|
+| easy | 500 | low | profit + trade discipline + drawdown |
+| medium | 1500 | medium | profit + win rate + drawdown |
+| hard | 3000 | high | profit + trade count + drawdown |
+
+Changing **TASK** or **SEED** in the terminal auto-starts a new episode.
+
+---
+
+## The environment
+
+**Observation:** Multi-TF OHLCV, cash, position, unrealized PnL, chart patterns, market regime.
+
+**LLM actions (JSON):** `open_long`, `open_short`, `close_position`, `do_nothing`
+
+**Reward shaping:** Format compliance, execution validity, pattern alignment, drawdown tracking, revenge-trading detection, hold-winner bonus.
+
+### Calibrated graders
+
+| Task | Profit | Win Rate | Discipline | Max Drawdown |
+|------|:------:|:--------:|:----------:|:------------:|
+| easy | 0.5 | — | 0.2 (1–8 trades) | 0.3 (10% budget) |
+| medium | 0.4 | 0.3 | — | 0.3 (15% budget) |
+| hard | 0.4 | — | 0.3 (1–30 trades) | 0.3 (20% budget) |
+
+---
+
+## Training pipeline
+
+- **Base model:** `unsloth/Qwen2.5-0.5B-Instruct` (fits 4 GB GPUs; switch to 1.5B on T4+)
+- **Method:** GRPO with environment reward + JSON format reward
+- **Output:** `./trained_trader_lora/` (used by server + next training run)
+- **Checkpoints:** `trading_agent/checkpoint-*` saved every 20 steps during training, deleted after a successful run (final adapter is kept)
+
+![Training Reward Curve](reward_curve.png)
+
+Training is **resumable**: successive runs continue from the saved adapter and fresh market seeds (`training_state.json`).
+
+### Before / after baseline comparison
+
+Evaluated in `evaluate.py` over unseen test data:
+
+| Agent | Mean Reward |
+|---|---|
+| Random | `-19.78 ± 0.69` |
+| SMA Crossover | `-0.50 ± 0.00` |
+| Trained GRPO LLM | *(run `evaluate.py` after training)* |
+
+---
+
+## API
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /reset`, `POST /step` | OpenEnv-compliant RL interface |
+| `GET /api/status` | LLM adapter availability |
+| `POST /api/reset` | Start demo episode `{task, seed}` |
+| `POST /api/step` | Advance demo `{mode: manual\|bot\|sma\|random\|llm, steps, ...}` |
+| `POST /agent/predict` | Query trained LLM directly |
+
+---
+
+## Docker (Hugging Face Spaces)
+
 ```bash
-python evaluate.py
+docker build -t disciplined_trader .
+docker run -p 7860:7860 disciplined_trader
 ```
+
+Bot / SMA / Random modes work without a trained adapter. For LLM mode in Docker, mount or copy `trained_trader_lora/` into the container.
+
+---
+
+## Tips
+
+- **Always use the project venv** — system Python won't have torch (`run_server.ps1` handles this).
+- **Caches** — scripts store Hugging Face / pip caches in `./hf-cache` and `./pip-cache` inside the project folder.
+- **Don't train + run LLM inference simultaneously** on a 4 GB GPU — run one at a time.
+- **Fast demo?** Use Disciplined Bot. **Watch the trained agent?** Use Trained LLM (GRPO).
+
+---
+
+## License
+
+MIT

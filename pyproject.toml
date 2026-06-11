@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "disciplined_trader_env"
 version = "1.0.0"
-description = "Technical trading environment with multi-timeframes, risk limits, and psychology rules"
+description = "Multi-timeframe trading environment with GRPO-trained LLM agent and live web terminal"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [{name = "Your Name", email = "your.email@example.com"}]
+authors = [{name = "Disciplined Trader Team"}]
 dependencies = [
     "pydantic>=2.0",
     "openenv-core>=0.2.0",
@@ -17,6 +17,19 @@ dependencies = [
     "uvicorn",
     "numpy",
     "pandas",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch",
+    "transformers",
+    "accelerate",
+    "peft",
+    "bitsandbytes",
+    "datasets",
+    "trl",
+    "unsloth",
+    "matplotlib",
 ]
 
 [project.scripts]

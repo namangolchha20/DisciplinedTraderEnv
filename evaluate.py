@@ -1,73 +1,63 @@
 import os
+import re
 import json
-import torch
 import numpy as np
+import torch
 from env.environment import DisciplinedTraderEnv
 from env.models import Action
-
-# ------------------------------------------------------------
-# Baseline Policy
-# ------------------------------------------------------------
-def sma_crossover_policy(obs, env):
-    if hasattr(obs, 'tf_1h') and hasattr(obs.tf_1h, 'moving_average') and hasattr(obs.tf_1h, 'sma50'):
-        if obs.tf_1h.moving_average > obs.tf_1h.sma50:
-            if env.position_shares == 0:
-                return Action(action_type="open_long", amount_shares=20)
-            elif env.position_shares < 0:
-                return Action(action_type="close_position", amount_shares=0)
-        elif obs.tf_1h.moving_average < obs.tf_1h.sma50:
-            if env.position_shares == 0:
-                return Action(action_type="open_short", amount_shares=20)
-            elif env.position_shares > 0:
-                return Action(action_type="close_position", amount_shares=0)
-    return Action(action_type="do_nothing", amount_shares=0)
+from env.policies import sma_crossover_policy, disciplined_bot, random_policy, llm_position_overlay
+from env.graders import grade
+from env.model_loader import load_trained_agent
 
 # ------------------------------------------------------------
 # Agent Policy wrapper
 # ------------------------------------------------------------
 class LLMTradingAgent:
     def __init__(self, model_path="./trained_trader_lora"):
-        from unsloth import FastLanguageModel
         print(f"Loading trained agent from {model_path}...")
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_path,
-            max_seq_length=1024,
-            dtype=torch.float16,
-            load_in_4bit=True,
-        )
-        FastLanguageModel.for_inference(self.model)
+        self.model, self.tokenizer = load_trained_agent(model_path)
 
     def get_action(self, obs, env, seed_val, step_val):
-        prompt = (f"[SEED:{seed_val}][STEP:{step_val}]\n"
+        # Must mirror the training prompt template in inference.py exactly.
+        prompt = (f"[SEED:{seed_val}][STEP:{step_val}][TASK:{env.task}]\n"
                   f"Observation: cash={obs.cash:.0f}, value={obs.account_value:.0f}, "
                   f"pos={obs.position_shares}, price={obs.tf_1m.ohlcv.close:.2f}\n"
                   f"Regime: {obs.market_regime}, Pattern: {obs.tf_1m.chart_pattern}\n"
                   "Valid action_types: 'open_long', 'open_short', 'close_position', 'do_nothing'\n"
                   "Generate an action in JSON: {\"action_type\": \"...\", \"amount_shares\": 0}")
-        
-        inputs = self.tokenizer([prompt], return_tensors="pt").to("cuda")
-        outputs = self.model.generate(**inputs, max_new_tokens=64, pad_token_id=self.tokenizer.pad_token_id)
-        
-        completion = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
-        
-        import re
+
+        device = next(self.model.parameters()).device
+        inputs = self.tokenizer([prompt], return_tensors="pt").to(device)
+        with torch.inference_mode():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=64,
+                pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+            )
+        completion = self.tokenizer.decode(
+            outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
+        )
+
         try:
             json_match = re.search(r'\{.*\}', completion, re.DOTALL)
             if json_match:
                 action_dict = json.loads(json_match.group())
-                return Action(
+                llm_action = Action(
                     action_type=action_dict.get("action_type", "do_nothing"),
-                    amount_shares=action_dict.get("amount_shares", 0)
+                    amount_shares=action_dict.get("amount_shares", 0),
                 )
+            else:
+                llm_action = Action(action_type="do_nothing", amount_shares=0)
         except Exception:
-            pass
-            
-        return Action(action_type="do_nothing", amount_shares=0)
+            llm_action = Action(action_type="do_nothing", amount_shares=0)
+
+        return llm_position_overlay(obs, llm_action)
 
 def evaluate(policy_func, name="Policy", num_episodes=5, task="easy"):
     env = DisciplinedTraderEnv()
     rewards = []
     account_values = []
+    grades = []
     
     print(f"\nEvaluating {name} over {num_episodes} episodes...")
     for ep in range(num_episodes):
@@ -81,7 +71,7 @@ def evaluate(policy_func, name="Policy", num_episodes=5, task="easy"):
             if isinstance(policy_func, LLMTradingAgent):
                 action = policy_func.get_action(obs, env, seed_val, step)
             else:
-                action = policy_func(obs, env)
+                action = policy_func(obs)
                 
             result = env.step(action)
             total += result.reward
@@ -91,15 +81,18 @@ def evaluate(policy_func, name="Policy", num_episodes=5, task="easy"):
             
         rewards.append(total)
         account_values.append(obs.account_value)
-        print(f"Episode {ep+1}: Reward = {total:.2f}, Final Account Value = ${obs.account_value:.2f}")
+        grades.append(grade(env, task))
+        print(f"Episode {ep+1}: Reward = {total:.2f}, Final Account Value = ${obs.account_value:.2f}, Grade = {grades[-1]:.3f}")
         
     mean_reward = np.mean(rewards)
     std_reward = np.std(rewards)
     mean_acc = np.mean(account_values)
+    mean_grade = np.mean(grades)
     
     print(f"\n--- {name} Results ---")
     print(f"Mean Reward: {mean_reward:.2f} ± {std_reward:.2f}")
     print(f"Mean Account Value: ${mean_acc:.2f}")
+    print(f"Mean Grade: {mean_grade:.3f}")
     return mean_reward, mean_acc
 
 if __name__ == "__main__":
@@ -110,3 +103,5 @@ if __name__ == "__main__":
         print(f"Could not load LLM agent (Make sure ./trained_trader_lora exists!): {e}")
         
     evaluate(sma_crossover_policy, name="SMA Crossover Baseline", num_episodes=5)
+    evaluate(disciplined_bot, name="Disciplined Rule Bot", num_episodes=5)
+    evaluate(random_policy, name="Random Policy", num_episodes=5)

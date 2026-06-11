@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Disciplined Trader — RL Trading Terminal</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ======================= TOP BAR ======================= -->
+  <header class="topbar panel">
+    <div class="brand">
+      <div class="brand-bolt">⚡</div>
+      <div>
+        <div class="brand-name">DISCIPLINED&nbsp;TRADER</div>
+        <div class="brand-sub">OpenEnv · GRPO · RL Terminal</div>
+      </div>
+    </div>
+
+    <div class="top-controls">
+      <label class="field">
+        <span>TASK</span>
+        <select id="task-select">
+          <option value="easy">EASY · 500 bars</option>
+          <option value="medium">MEDIUM · 1500 bars</option>
+          <option value="hard">HARD · 3000 bars</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>SEED</span>
+        <input id="seed-input" type="number" value="42" min="0" />
+      </label>
+      <button id="reset-btn" class="btn btn-primary">⟳ NEW EPISODE</button>
+    </div>
+
+    <div class="top-status">
+      <div id="regime-badge" class="regime-badge sideways">SIDEWAYS</div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span id="episode-label" class="mono">EASY</span> · <span id="bar-label">0 / 0</span> bars</div>
+        <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+      </div>
+      <div class="reward-box">
+        <div class="reward-line"><span class="muted">STEP R</span><span id="reward-step" class="mono">0.000</span></div>
+        <div class="reward-line"><span class="muted">TOTAL R</span><span id="reward-total" class="mono">0.000</span></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ======================= MAIN ======================= -->
+  <main class="main">
+
+    <!-- ---------- CHART COLUMN ---------- -->
+    <section class="chart-col">
+      <div class="panel chart-panel">
+        <div class="chart-toolbar">
+          <div class="tf-tabs" id="tf-tabs">
+            <button data-tf="1m" class="tf-tab active">1m</button>
+            <button data-tf="5m" class="tf-tab">5m</button>
+            <button data-tf="15m" class="tf-tab">15m</button>
+            <button data-tf="1h" class="tf-tab">1h</button>
+            <button data-tf="1d" class="tf-tab">1d</button>
+          </div>
+          <div class="pattern-badges">
+            <div class="badge" id="candle-badge" title="Candlestick pattern (active TF)">— candle —</div>
+            <div class="badge" id="chart-badge" title="Chart pattern (active TF)">— chart —</div>
+            <div class="badge" id="st-badge" title="SuperTrend direction (active TF)">ST —</div>
+          </div>
+        </div>
+        <div id="main-chart" class="main-chart"></div>
+        <div id="toasts" class="toasts"></div>
+      </div>
+
+      <div class="bottom-row">
+        <div class="panel equity-panel">
+          <div class="panel-title">EQUITY CURVE <span id="equity-final" class="mono"></span></div>
+          <div id="equity-chart" class="equity-chart"></div>
+        </div>
+        <div class="panel blotter-panel">
+          <div class="panel-title">TRADE BLOTTER <span id="blotter-count" class="muted mono"></span></div>
+          <div class="blotter-scroll">
+            <table class="blotter">
+              <thead><tr><th>#</th><th>ENTRY</th><th>EXIT</th><th>P/L</th><th>CUM</th></tr></thead>
+              <tbody id="blotter-body"></tbody>
+            </table>
+            <div id="blotter-empty" class="blotter-empty">No closed trades yet — go hunt.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- SIDEBAR ---------- -->
+    <aside class="sidebar">
+
+      <div class="panel hud">
+        <div class="hud-equity">
+          <div class="muted small">ACCOUNT EQUITY</div>
+          <div id="hud-equity" class="hud-equity-num mono">$10,000.00</div>
+          <div id="hud-delta" class="hud-delta mono">+$0.00 (0.00%)</div>
+        </div>
+        <div class="hud-grid">
+          <div class="hud-cell"><span class="muted">CASH</span><span id="hud-cash" class="mono">$10,000</span></div>
+          <div class="hud-cell"><span class="muted">PRICE</span><span id="hud-price" class="mono">—</span></div>
+          <div class="hud-cell"><span class="muted">UNREALIZED</span><span id="hud-unreal" class="mono">$0.00</span></div>
+          <div class="hud-cell"><span class="muted">REALIZED</span><span id="hud-real" class="mono">$0.00</span></div>
+          <div class="hud-cell"><span class="muted">MAX DD</span><span id="hud-dd" class="mono">0.0%</span></div>
+          <div class="hud-cell"><span class="muted">WIN RATE</span><span id="hud-wr" class="mono">—</span></div>
+        </div>
+        <div id="position-chip" class="position-chip flat">FLAT — NO POSITION</div>
+        <div class="risk-wrap">
+          <div class="risk-label"><span class="muted small">RISK USAGE</span><span id="risk-pct" class="mono small">0%</span></div>
+          <div class="risk-track"><div id="risk-fill" class="risk-fill"></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">MULTI-TIMEFRAME RADAR</div>
+        <div class="radar" id="radar"></div>
+        <div class="confluence">
+          <div class="conf-head">
+            <span class="muted small">CONFLUENCE</span>
+            <span id="conf-verdict" class="conf-verdict mono">NEUTRAL</span>
+          </div>
+          <div class="conf-bar">
+            <div class="conf-track bull-side"><div id="conf-bull" class="conf-fill bull"></div><span id="conf-bull-val" class="conf-val mono">0.0</span></div>
+            <div class="conf-track bear-side"><div id="conf-bear" class="conf-fill bear"></div><span id="conf-bear-val" class="conf-val mono">0.0</span></div>
+          </div>
+          <div class="conf-note muted small">bot enters at score ≥ <span id="conf-threshold" class="mono">7.0</span> with clear edge</div>
+        </div>
+      </div>
+
+      <div class="panel controls">
+        <div class="panel-title">AUTOPILOT</div>
+        <div class="ctl-row">
+          <select id="policy-select" class="grow">
+            <option value="bot">🤖 Disciplined Bot (confluence)</option>
+            <option value="llm">🧠 Trained LLM (GRPO)</option>
+            <option value="sma">📐 SMA Crossover</option>
+            <option value="random">🎲 Random (chaos)</option>
+          </select>
+          <button id="play-btn" class="btn btn-play">▶ RUN</button>
+        </div>
+        <div class="ctl-row speed-row">
+          <span class="muted small">SPEED</span>
+          <input id="speed-slider" type="range" min="0" max="4" value="2" />
+          <span id="speed-label" class="mono small">5×</span>
+        </div>
+        <div id="llm-speed-note" class="muted small hidden">LLM mode: 1 bar per step (~6s on GPU). Trailing stops apply automatically.</div>
+        <div class="ctl-row">
+          <button class="btn btn-ghost step-btn" data-steps="1">+1</button>
+          <button class="btn btn-ghost step-btn" data-steps="25">+25</button>
+          <button class="btn btn-ghost step-btn" data-steps="100">+100</button>
+          <button class="btn btn-ghost step-btn" data-steps="500">+500</button>
+        </div>
+
+        <div class="panel-title manual-title">MANUAL OVERRIDE</div>
+        <div class="ctl-row">
+          <button id="long-btn" class="btn btn-long grow">▲ LONG</button>
+          <button id="short-btn" class="btn btn-short grow">▼ SHORT</button>
+        </div>
+        <div class="ctl-row">
+          <button id="close-btn" class="btn btn-ghost grow">✕ CLOSE</button>
+          <button id="wait-btn" class="btn btn-ghost grow">⏭ WAIT +1</button>
+        </div>
+        <div class="ctl-row">
+          <input id="shares-input" type="number" placeholder="shares (max)" min="1" class="grow" />
+          <input id="stop-input" type="number" placeholder="stop %" step="0.5" min="0.5" class="stop-input" />
+          <button id="stop-btn" class="btn btn-ghost">SET STOP</button>
+        </div>
+        <div class="hotkeys muted small">space run · → step · L long · S short · C close</div>
+      </div>
+
+    </aside>
+  </main>
+</div>
+
+<!-- ======================= EPISODE-END MODAL ======================= -->
+<div id="modal" class="modal hidden">
+  <div class="modal-card panel">
+    <div class="modal-title">EPISODE COMPLETE</div>
+    <div class="grade-ring-wrap">
+      <svg viewBox="0 0 120 120" class="grade-ring">
+        <circle cx="60" cy="60" r="52" class="ring-bg"/>
+        <circle id="ring-fg" cx="60" cy="60" r="52" class="ring-fg"/>
+      </svg>
+      <div class="grade-center">
+        <div id="grade-letter" class="grade-letter">—</div>
+        <div id="grade-score" class="grade-score mono">0.000</div>
+      </div>
+    </div>
+    <div class="modal-stats" id="modal-stats"></div>
+    <button id="modal-restart" class="btn btn-primary wide">⟳ RUN IT BACK</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
