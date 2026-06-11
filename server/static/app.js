@@ -407,7 +407,8 @@ async function doStep(body) {
     const p = await api("/api/step", body);
     applyPayload(p);
   } catch (e) {
-    toast(e.message, "bad");
+    const msg = e.message || String(e);
+    toast(msg.length > 180 ? msg.slice(0, 180) + "…" : msg, "bad");
     stopAutopilot();
   } finally {
     state.inFlight = false;
@@ -562,7 +563,6 @@ async function checkLlmAvailability() {
       opt.textContent = llm_loaded
         ? "🧠 Trained LLM (GRPO)"
         : "🧠 Trained LLM (GRPO) — loads on first step";
-      if (load_error) toast(load_error, "bad");
     } else {
       opt.disabled = true;
       opt.textContent = "🧠 Trained LLM — train first (inference.py)";

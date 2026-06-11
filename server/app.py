@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -15,7 +16,7 @@ from env.models import Action, Observation
 from env.environment import DisciplinedTraderEnv
 from env.graders import grade
 from env.policies import POLICIES, confluence_score, CONFLUENCE_MAX, ENTRY_SCORE, ENTRY_MARGIN, llm_position_overlay
-from env.model_loader import load_trained_agent
+from env.model_loader import load_trained_agent, ensure_adapter_downloaded
 
 # ----------------------------------------------------------------------
 # OpenEnv-compliant app (exposes /reset, /step, /state for RL clients)
@@ -35,23 +36,62 @@ _adapter_loaded_stamp = None
 _agent_lock = threading.Lock()
 _load_error: Optional[str] = None
 ADAPTER_DIR = Path("./trained_trader_lora")
+HF_ADAPTER_REPO = os.environ.get("HF_ADAPTER_REPO", "NGGAMER/disciplined-trader-lora")
+
+
+def _ensure_adapter_files() -> bool:
+    """Local adapter or download from Hugging Face Hub."""
+    if (ADAPTER_DIR / "adapter_config.json").exists():
+        return True
+    try:
+        ensure_adapter_downloaded(ADAPTER_DIR, HF_ADAPTER_REPO)
+        return (ADAPTER_DIR / "adapter_config.json").exists()
+    except Exception as e:
+        global _load_error
+        err = str(e)
+        if "404" in err or "Repository Not Found" in err:
+            _load_error = (
+                f"Model repo not found: huggingface.co/{HF_ADAPTER_REPO}. "
+                "Upload adapter files to that Model repo first."
+            )
+        elif "401" in err or "403" in err:
+            _load_error = f"Cannot access {HF_ADAPTER_REPO} — make the model repo public."
+        else:
+            _load_error = f"Could not download adapter from {HF_ADAPTER_REPO}: {err}"
+        print(f"Warning: {_load_error}")
+        return False
 
 
 def _adapter_stamp():
-    """Modification time of the saved adapter, or None if not trained yet."""
+    """Modification time of a local adapter, or None if not present."""
     try:
         return (ADAPTER_DIR / "adapter_config.json").stat().st_mtime
     except OSError:
         return None
 
 
+def _adapter_available() -> bool:
+    """True if LLM mode can be attempted (local files or Hub repo configured)."""
+    if (ADAPTER_DIR / "adapter_config.json").exists():
+        return True
+    return bool(HF_ADAPTER_REPO)
+
+
 def load_agent():
     global model, tokenizer, _adapter_loaded_stamp, _load_error
+    if not _ensure_adapter_files():
+        return
     stamp = _adapter_stamp()
     if stamp is None:
-        _load_error = None
         return
     try:
+        import torch
+        if not torch.cuda.is_available():
+            _load_error = (
+                "LLM mode needs a GPU. On Hugging Face Spaces, set Hardware to a GPU tier "
+                "(e.g. T4 small). Bot/SMA/Random work on CPU."
+            )
+            return
         print(f"Loading trained agent from {ADAPTER_DIR} (python: {sys.executable})...")
         model, tokenizer = load_trained_agent(ADAPTER_DIR)
         _adapter_loaded_stamp = stamp
@@ -59,11 +99,12 @@ def load_agent():
         print("Agent loaded successfully!")
     except Exception as e:
         _load_error = str(e)
-        print(
-            "Warning: Could not load trained agent. "
-            f"If you see 'No module named torch', run .\\run_server.ps1 "
-            f"(current python: {sys.executable}). Error: {e}"
-        )
+        if "bitsandbytes" in _load_error.lower() or "cuda" in _load_error.lower():
+            _load_error = (
+                "LLM failed to load (GPU/CUDA required). Use Disciplined Bot on CPU, "
+                f"or enable GPU hardware on the Space. Detail: {e}"
+            )
+        print(f"Warning: Could not load trained agent: {_load_error}")
 
 
 def maybe_reload_agent():
@@ -77,14 +118,17 @@ def ensure_agent_loaded() -> bool:
     """Load the LLM on first use so the web terminal starts without GPU deps."""
     with _agent_lock:
         maybe_reload_agent()
-        if model is None and _adapter_stamp() is not None:
+        if model is None and _adapter_available():
             load_agent()
     return model is not None and tokenizer is not None
 
 
 def _llm_unavailable_detail() -> str:
-    if _adapter_stamp() is None:
-        return "No trained adapter found. Run `python inference.py` first (saves to ./trained_trader_lora)."
+    if not (ADAPTER_DIR / "adapter_config.json").exists() and not _ensure_adapter_files():
+        return (
+            f"No trained adapter found. Train locally (`inference.py`) or upload to "
+            f"huggingface.co/{HF_ADAPTER_REPO} and set HF_ADAPTER_REPO if needed."
+        )
     if _load_error and "No module named 'torch'" in _load_error:
         return (
             "PyTorch is not installed in this Python. "
@@ -297,10 +341,9 @@ def _new_trades(sess: DemoSession):
 
 @app.get("/api/status")
 def demo_status():
-    adapter_ready = _adapter_stamp() is not None
     loaded = model is not None and tokenizer is not None
     return {
-        "llm_available": adapter_ready,
+        "llm_available": _adapter_available(),
         "llm_loaded": loaded,
         "load_error": _load_error,
         "python": sys.executable,

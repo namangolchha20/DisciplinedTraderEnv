@@ -181,14 +181,36 @@ Evaluated in `evaluate.py` over unseen test data:
 
 ---
 
-## Docker (Hugging Face Spaces)
+## Hugging Face Spaces
+
+**Space:** [NGGAMER/disciplined-trader-train](https://huggingface.co/spaces/NGGAMER/disciplined-trader-train)
+
+Upload project files to the Space repo (Files tab or `git push` to the Space). Settings:
+
+| Setting | Value |
+|---|---|
+| SDK | Docker |
+| App port | `7860` |
+| Hardware | **GPU** for Trained LLM; CPU basic for Bot/SMA/Random only |
+
+### Upload the trained LoRA (for LLM mode)
+
+1. Create a **Model** repo: `NGGAMER/disciplined-trader-lora`  
+2. Upload everything inside `./trained_trader_lora/` (web UI **Upload files** or CLI):
+
+```powershell
+.\.venv312\Scripts\python.exe -m huggingface_hub.cli login
+.\.venv312\Scripts\python.exe -m huggingface_hub.cli upload NGGAMER/disciplined-trader-lora ./trained_trader_lora
+```
+
+3. On first LLM step, the Space **auto-downloads** that repo into `./trained_trader_lora/` (override with env var `HF_ADAPTER_REPO`).
+
+### Local Docker
 
 ```bash
 docker build -t disciplined_trader .
-docker run -p 7860:7860 disciplined_trader
+docker run -p 7860:7860 -e HF_ADAPTER_REPO=NGGAMER/disciplined-trader-lora disciplined_trader
 ```
-
-Bot / SMA / Random modes work without a trained adapter. For LLM mode in Docker, mount or copy `trained_trader_lora/` into the container.
 
 ---
 
